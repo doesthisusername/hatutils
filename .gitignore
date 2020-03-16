@@ -1,0 +1,10 @@
+# mega scuffed
+
+**/.vs
+**/.vscode
+**/Debug
+**/Release
+**/x64
+linux/hatlag/hatlag
+linux/hatlag/bind.cfg
+linux/hatser/hatser
