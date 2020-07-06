@@ -55,11 +55,11 @@ int main(int argc, char** argv) {
     puts("Starting hatlag...");
 
     // try opening bind file
-    FILE* bind_f = fopen("bind.cfg", "r");
+    FILE* bind_f = fopen("bindkb.cfg", "r");
 
     // assume !bind_f means it didn't exist
     if(!bind_f || (argc > 1 && strcmp(argv[1], "bind") == 0)) {
-        puts("Creating bind.cfg file, as it doesn't exist, or the bind command was specified\n");
+        puts("Creating bindkb.cfg file, as it doesn't exist, or the bind command was specified\n");
 
         if(bind_f) {
             fclose(bind_f);
@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             else {
-                printf("Found key code %hu for device %s, saving to bind.cfg...\n", input_code, input_dev_path);
+                printf("Found key code %hu for device %s, saving to bindkb.cfg...\n", input_code, input_dev_path);
             }
         }
         else {
@@ -168,9 +168,9 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        bind_f = fopen("bind.cfg", "w");
+        bind_f = fopen("bindkb.cfg", "w");
         if(bind_f == NULL) {
-            puts("Unable to open bind.cfg for writing, not good...");
+            puts("Unable to open bindkb.cfg for writing, not good...");
             return 1;
         }
 
@@ -206,18 +206,34 @@ int main(int argc, char** argv) {
 
             s32 dev_fd = open(input_dev_path, O_RDONLY);
             if(dev_fd == -1) {
-                printf("Failed to open %s, not good...\n", input_dev_path);
-                return 1;
+                printf("Failed to open %s, retrying in a second...\n", input_dev_path);
+                sleep(1);
+                continue;
             }
 
             struct input_event ie;
             u8 lag_fail = 0;
+            struct timeval last_time;
             while(read(dev_fd, &ie, sizeof(ie))) {
                 if(ie.code == input_code && ie.type == EV_KEY) {
+                    //__builtin_dump_struct(&ie, &printf);
+
                     if(!lag(400)) {
                         lag_fail = 1;
                         break;
                     }
+                }
+                // disconnect heuristic (same timestamp for the last 200 events)
+                else {
+                    lag_fail++;
+                    if(ie.time.tv_sec != last_time.tv_sec || ie.time.tv_usec != last_time.tv_usec) {
+                        lag_fail = 0;
+                    }
+                    else if(lag_fail > 200) {
+                        break;
+                    }
+
+                    last_time = ie.time;
                 }
             }
             close(dev_fd);

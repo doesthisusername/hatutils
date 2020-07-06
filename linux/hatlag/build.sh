@@ -1,3 +1,3 @@
 #!/bin/bash
 
-gcc -o hatlag -O3 main.c ../api.c
+clang -o hatlag -O3 main.c ../api.c

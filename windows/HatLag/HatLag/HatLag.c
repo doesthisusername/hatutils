@@ -10,10 +10,11 @@
 #define PE_TS_OFFSET (0x08)
 
 enum {
+	DLC15_8061143192026666389 = 1537061434, // dw patch
 	DLC21_242922671485761424 = 1557549916, // any% patch
 	DLC231_7770543545116491859 = 1561041656, // tas patch
 	DLC232_5506509173732835905 = 1565114742, // 110% patch
-	VER_MAX = 3
+	VER_MAX = 4
 };
 
 struct hotkey {
@@ -29,10 +30,12 @@ DWORD tid;
 
 BYTE* hat_address = NULL;
 unsigned int pe_ts;
+unsigned int i_am_testing = 0;
 
 BYTE* fps_address = NULL;
 char* fps_path = NULL;
-const char* fps_paths[VER_MAX] = {
+char* fps_paths[VER_MAX] = {
+	"0x11C27E0, 0x710",
 	"0x11BC360, 0x710",
 	"0x11F6F10, 0x710",
 	"0x11F9FE0, 0x710"
@@ -90,20 +93,23 @@ int init() {
 	// get process handle passing in the pid
 	process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
 	if(process == NULL) {
-		printf("Failed to open the game process!\n");
+		printf("Failed to open the game process, press any key to exit.\n");
+		getchar();
 		return 0;
 	}
 	// get thread handle passing in the tid
 	thread = OpenThread(THREAD_ALL_ACCESS, FALSE, tid);
 	if(thread == NULL) {
-		printf("Failed to open the main thread!\n");
+		printf("Failed to open the main thread, press any key to exit.\n");
+		getchar();
 		return 0;
 	}
 
 	// find base addresses and store them
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
 	if(snapshot == INVALID_HANDLE_VALUE) {
-		printf("Failed to create snapshot of modules!\n");
+		printf("Failed to create snapshot of modules, press any key to exit.\n");
+		getchar();
 		return 0;
 	}
 
@@ -120,7 +126,8 @@ int init() {
 	CloseHandle(snapshot);
 
 	if(hat_address == NULL) {
-		printf("Failed to find base address of HatinTimeGame.exe!\n");
+		printf("Failed to find base address of HatinTimeGame.exe, press any key to exit.\n");
+		getchar();
 		return 0;
 	}
 
@@ -175,7 +182,7 @@ struct hotkey* parse_keybinds(const char* path, unsigned int* out_num) {
 
 		hotkeys[*out_num].vk = strtoul(txtbuf, &txtbuf, 0);
 		txtbuf++;
-		hotkeys[*out_num].duration = 400.0f;
+		hotkeys[*out_num].duration = !i_am_testing ? 400.0f : strtof(txtbuf, NULL);
 		(*out_num)++;
 
 		while(*txtbuf == '\r' || *txtbuf == '\n') {
@@ -192,16 +199,24 @@ int main(int argc, char** argv) {
 	int always = 1;
 
 	char* hotkey_path = "keybinds.txt";
-	if(argc > 1) {
-		hotkey_path = argv[1];
+
+	for(int i = 1; i < argc; i++) {
+		if(strncmp(argv[i], "--i-am-testing", sizeof("--i-am-testing") - 1) == 0) {
+			i_am_testing = 1;
+		}
+		else {
+			hotkey_path = argv[i];
+		}
 	}
 
+	unsigned int game_open = 0;
 	unsigned int hotkey_num;
 	struct hotkey* hotkeys = NULL;
 
 	while(1) {
 		if(!is_hat_open() || always) {
 			always = 0;
+			game_open = 0;
 			printf("Waiting for the game to open...\n");
 			
 			while(!init()) {
@@ -211,13 +226,21 @@ int main(int argc, char** argv) {
 			pe_ts = get_pe_ts(hat_address);
 
 			switch(pe_ts) {
-				case DLC21_242922671485761424: fps_path = fps_paths[0]; break;
-				case DLC231_7770543545116491859: fps_path = fps_paths[1]; break;
-				case DLC232_5506509173732835905: fps_path = fps_paths[2]; break;
-				default: printf("Your version of the game is not supported (%u)\n", pe_ts); return 1;
+				case DLC15_8061143192026666389: fps_path = fps_paths[0]; break;
+				case DLC21_242922671485761424: fps_path = fps_paths[1]; break;
+				case DLC231_7770543545116491859: fps_path = fps_paths[2]; break;
+				case DLC232_5506509173732835905: fps_path = fps_paths[3]; break;
+				default: {
+					printf("Your version of the game is not supported (%u), doing nothing.\n", pe_ts);
+					continue;
+				}
 			}
 
-			fps_address = resolve_ptr_path(process, hat_address, fps_path);
+			do {
+				Sleep(500);
+				fps_address = resolve_ptr_path(process, hat_address, fps_path);
+			}
+			while(fps_address < (BYTE*)0x10000); // arbitrary
 
 			if(hotkeys != NULL) {
 				free(hotkeys);
@@ -225,10 +248,12 @@ int main(int argc, char** argv) {
 
 			hotkeys = parse_keybinds(hotkey_path, &hotkey_num);
 			if(hotkeys == NULL) {
-				printf("Keybind parsing error...\n");
+				printf("Keybind parsing error, press any key to exit.\n");
+				getchar();
 				return 0;
 			}
 
+			game_open = 1;
 			printf("Game opened!\n");
 		}
 
@@ -236,21 +261,23 @@ int main(int argc, char** argv) {
 			always = 1;
 		}
 		
-		for(unsigned int i = 0; i < hotkey_num; i++) {
-			if(GetAsyncKeyState(hotkeys[i].vk) & 0x8000) {
-				printf("Lagging for %fms with key 0x%02X\n", hotkeys[i].duration, hotkeys[i].vk);
-				float orig_fps;
-				float new_fps = 1000.0f / hotkeys[i].duration;
+		if(is_hat_open() && game_open) {
+			for(unsigned int i = 0; i < hotkey_num; i++) {
+				if(GetAsyncKeyState(hotkeys[i].vk) & 0x8000) {
+					printf("Lagging for %fms with key 0x%02X\n", hotkeys[i].duration, hotkeys[i].vk);
+					float orig_fps;
+					float new_fps = 1000.0f / hotkeys[i].duration;
 
-				ReadProcessMemory(process, fps_address, &orig_fps, sizeof(orig_fps), NULL);
-				WriteProcessMemory(process, fps_address, &new_fps, sizeof(new_fps), NULL);
+					ReadProcessMemory(process, fps_address, &orig_fps, sizeof(orig_fps), NULL);
+					WriteProcessMemory(process, fps_address, &new_fps, sizeof(new_fps), NULL);
 
-				Sleep(hotkeys[i].duration * 0.3f);
-				WriteProcessMemory(process, fps_address, &orig_fps, sizeof(orig_fps), NULL);
+					Sleep((DWORD)(hotkeys[i].duration * 0.3f));
+					WriteProcessMemory(process, fps_address, &orig_fps, sizeof(orig_fps), NULL);
+				}
 			}
 		}
 
-		Sleep(5);
+		Sleep(3);
 	}
 
 	return 0;

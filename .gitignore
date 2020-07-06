@@ -5,6 +5,9 @@
 **/Debug
 **/Release
 **/x64
-linux/hatlag/hatlag
-linux/hatlag/bind.cfg
-linux/hatser/hatser
+**/*.bin
+linux/hatlag/hatlag*
+linux/hatlag/mainjs.c
+linux/hatlag/*.cfg
+linux/hatser/hatser*
+linux/tas*
