@@ -119,6 +119,47 @@ void read_bytes(s32 pid, void* addr, u64 len, void* buf) {
     process_vm_readv(pid, &local, 1, &remote, 1, 0);
 }
 
+u64 aob_scan(s32 pid, const u8* signature, const u8* mask, u64 len, u64 from, u64 to) {
+    struct iovec local;
+    struct iovec remote;
+    const u64 region_len = to - from;
+    
+    u8* const buf = malloc(region_len);
+    if(buf == NULL) {
+        return 0;
+    }
+
+    local.iov_base = buf;
+    local.iov_len = region_len;
+
+    remote.iov_base = (void*)from;
+    remote.iov_len = region_len;
+
+    const ssize_t nread = process_vm_readv(pid, &local, 1, &remote, 1, 0);
+    if(nread < region_len) {
+        free(buf);
+        return 0;
+    }
+    
+    for(u8* ofs = buf; ofs < buf + region_len - len; ofs++) {
+        for(u64 i = 0; i < len; i++) {
+            if((ofs[i] & mask[i]) != (signature[i] & mask[i])) {
+                break;
+            }
+
+            if(i == len - 1) {
+                free(buf);
+
+                // offset from `from` instead of `buf`
+                return (u64)(ofs - buf + from);
+            }
+        }
+    }
+
+    free(buf);
+    return 0;
+}
+
 u8 write_bytes(s32 pid, void* addr, u64 len, void* buf) {
     struct iovec local;
     struct iovec remote;
@@ -133,6 +174,6 @@ u8 write_bytes(s32 pid, void* addr, u64 len, void* buf) {
     return nwritten == len;
 }
 
-#elif _WIN32
+#elif defined(_WIN32)
 // TODO
 #endif

@@ -9,30 +9,16 @@
 #include <string.h>
 #include "../api.h"
 
-// pe timestamps
-enum hat_vers {
-    DLC21 = 1557549916, // any%
-    DLC231 = 1561041656, // tas
-    DLC232 = 1565114742, // 110%
-    VER_NUM = 3
-};
-
-const u64 fps_ptrs[VER_NUM][2] = {
-    { 0x11BC360, 0x710 },
-    { 0x11F6F10, 0x710 },
-    { 0x11F9FE0, 0x710 }
-};
+#define BIND_FILE "bind1.cfg"
 
 s32 hat_pid;
 u32 hat_ver_idx;
+void* fps_ptr = NULL;
 
 // return zero if write failed
 u8 lag(f32 milliseconds) {
     f32 orig_fps;
     f32 new_fps = 1000.0f / milliseconds;
-
-    // bad pointer resolution
-    void* fps_ptr = (void*)(read_u64(hat_pid, (void*)(0x0000000140000000 + fps_ptrs[hat_ver_idx][0])) + fps_ptrs[hat_ver_idx][1]);
 
     read_bytes(hat_pid, fps_ptr, sizeof(orig_fps), &orig_fps);  
     if(!write_bytes(hat_pid, fps_ptr, sizeof(new_fps), &new_fps)) {
@@ -49,17 +35,18 @@ u8 lag(f32 milliseconds) {
 
 char* input_names[64];
 char input_dev_path[256];
-u16 input_code = UINT16_MAX;
+size_t input_code_n = 0;
+u16 input_codes[8] = {UINT16_MAX};
 
 int main(int argc, char** argv) {
     puts("Starting hatlag...");
 
     // try opening bind file
-    FILE* bind_f = fopen("bindkb.cfg", "r");
+    FILE* bind_f = fopen(BIND_FILE, "r");
 
     // assume !bind_f means it didn't exist
     if(!bind_f || (argc > 1 && strcmp(argv[1], "bind") == 0)) {
-        puts("Creating bindkb.cfg file, as it doesn't exist, or the bind command was specified\n");
+        puts("Creating " BIND_FILE " file, as it doesn't exist, or the bind command was specified\n");
 
         if(bind_f) {
             fclose(bind_f);
@@ -125,7 +112,8 @@ int main(int argc, char** argv) {
                         // exists
                         if(ie_history[i].code == ie.code) {
                             if(ie_history[i].time.tv_sec < ie.time.tv_sec - 4) {
-                                input_code = ie.code;
+                                input_codes[input_code_n] = ie.code;
+                                input_code_n++;
                                 chosen = 1;
                             }
 
@@ -155,12 +143,12 @@ int main(int argc, char** argv) {
             close(dev_fd);
 
             // failed to find key
-            if(input_code == UINT16_MAX) {
+            if(input_codes[0] == UINT16_MAX) {
                 puts("Failed to find a key code, did you run as root?");
                 return 1;
             }
             else {
-                printf("Found key code %hu for device %s, saving to bindkb.cfg...\n", input_code, input_dev_path);
+                printf("Found key code %hu for device %s, saving to " BIND_FILE "...\n", input_codes[0], input_dev_path);
             }
         }
         else {
@@ -168,21 +156,28 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        bind_f = fopen("bindkb.cfg", "w");
+        bind_f = fopen(BIND_FILE, "w");
         if(bind_f == NULL) {
-            puts("Unable to open bindkb.cfg for writing, not good...");
+            puts("Unable to open " BIND_FILE " for writing, not good...");
             return 1;
         }
 
         char buf[256];
-        snprintf(buf, sizeof(buf), "%d\n%s", input_code, input_dev_path);
+        snprintf(buf, sizeof(buf), "%s\n%d", input_dev_path, input_codes[0]);
         fwrite(buf, strlen(buf), 1, bind_f);
         fclose(bind_f);
 
         puts("Done configuring binds, returning to normal operation...");
     }
     else {
-        fscanf(bind_f, "%hd\n%s", &input_code, input_dev_path);
+        fscanf(bind_f, "%s", input_dev_path);
+        while(1) {
+            if(fscanf(bind_f, "%hd", &input_codes[input_code_n]) != 1) {
+                break;
+            }
+            input_code_n++;
+        }
+
         fclose(bind_f);
     }
 
@@ -193,16 +188,26 @@ int main(int argc, char** argv) {
         if(hat_pid != -1) {
             printf("Found HatinTimeGame.exe with pid %d\n", hat_pid);
 
-            // bad
-            u32 timestamp = read_u32(hat_pid, (void*)0x000000014000003C);
-            timestamp = read_u32(hat_pid, (void*)(0x0000000140000000 + timestamp + 0x08));
+            static const u8 signature[] = {
+                0x48, 0x8B, 0x05, 0xFE, 0xFE, 0xFE, 0xFE, 0x81, 0x88, 0xFE, 0xFE, 0xFE, 0xFE, 0x00, 0x00, 0x80, 0x00
+            };
+            static const u8 mask[] = {
+                0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
+            };
 
-            switch(timestamp) {
-                case DLC21: hat_ver_idx = 0; break;
-                case DLC231: hat_ver_idx = 1; break;
-                case DLC232: hat_ver_idx = 2; break;
-                default: printf("This version of A Hat in Time is not supported at the moment (%u)\n", timestamp); return 1;
+            // 0xA00000 is arbitrary (but 0x160000 is too small, and likely 0x900000)
+            const u64 fps_code = aob_scan(hat_pid, signature, mask, sizeof(signature), 0x0000000140000000, 0x0000000140000000 + 0xA00000);
+            if(fps_code == 0) {
+                puts("Failed to find FPS code");
+                continue;
             }
+
+            #define MOV_IMM_OFS 3
+            #define MOV_LEN 7
+            #define FPS_OFS 0x710
+            const u32 fps_rel = read_u32(hat_pid, (void*)(fps_code + MOV_IMM_OFS));
+            void* fps_ptr_struct = (void*)(fps_code + fps_rel + MOV_LEN);
+            fps_ptr = (void*)(read_u64(hat_pid, fps_ptr_struct) + FPS_OFS);
 
             s32 dev_fd = open(input_dev_path, O_RDONLY);
             if(dev_fd == -1) {
@@ -215,16 +220,27 @@ int main(int argc, char** argv) {
             u8 lag_fail = 0;
             struct timeval last_time;
             while(read(dev_fd, &ie, sizeof(ie))) {
-                if(ie.code == input_code && ie.type == EV_KEY) {
-                    //__builtin_dump_struct(&ie, &printf);
+                int found_key = 0;
+                int break_out = 0;
+                for(size_t i = 0; i < input_code_n; i++) {
+                    if(ie.code == input_codes[i] && ie.type == EV_KEY) {
+                        found_key = 1;
+                        //__builtin_dump_struct(&ie, &printf);
 
-                    if(!lag(400)) {
-                        lag_fail = 1;
+                        if(!lag(400)) {
+                            lag_fail = 1;
+                            break_out = 1;
+                        }
+                        
                         break;
                     }
                 }
+                if(break_out) {
+                    break;
+                }
+
                 // disconnect heuristic (same timestamp for the last 200 events)
-                else {
+                if(!found_key) {
                     lag_fail++;
                     if(ie.time.tv_sec != last_time.tv_sec || ie.time.tv_usec != last_time.tv_usec) {
                         lag_fail = 0;

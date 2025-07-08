@@ -19,7 +19,7 @@ typedef int64_t s64;
 
 typedef float f32;
 typedef double f64;
-#elif _WIN32
+#elif defined(_WIN32)
 // TODO
 #endif
 
@@ -57,6 +57,9 @@ s64 read_s64(s32 pid, u64 addr);
 // reads len bytes starting at address addr in process pid, storing result in buf
 void read_bytes(s32 pid, void* addr, u64 len, void* buf);
 
+
+// finds first occurrence of `signature`, only counting bits in `mask`, and returns its address
+u64 aob_scan(s32 pid, const u8* signature, const u8* mask, u64 len, u64 from, u64 to);
 
 // writing memory
 /*
